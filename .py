@@ -1,3 +1,4 @@
+# GlitchVideoStudio.py
 # Copyright (c) 2025 Loop507
 # MIT License - https://opensource.org/licenses/MIT 
 
@@ -6,9 +7,10 @@ import numpy as np
 import random
 import os
 
-# --- Effetti glitch ---
+# --- Effetti glitch avanzati ---
 
 def apply_pixel_shuffle(frame, intensity=5):
+    """Mescola i blocchi dell'immagine in modo casuale"""
     height, width = frame.shape[:2]
     block_size = intensity
     blocks = []
@@ -31,6 +33,7 @@ def apply_pixel_shuffle(frame, intensity=5):
 
 
 def apply_color_shift(frame, intensity=20):
+    """Sposta i canali R/B per effetto RGB split"""
     b, g, r = cv2.split(frame)
     b = np.roll(b, shift=random.randint(-intensity, intensity), axis=1)
     r = np.roll(r, shift=random.randint(-intensity, intensity), axis=1)
@@ -38,6 +41,7 @@ def apply_color_shift(frame, intensity=20):
 
 
 def apply_scanlines(frame, intensity=1):
+    """Aggiunge linee orizzontali tipo TV CRT"""
     height, width = frame.shape[:2]
     for y in range(0, height, random.randint(2, 5)):
         frame[y:y+1, :] = np.clip(frame[y:y+1, :] - random.randint(20, 50), 0, 255)
@@ -45,6 +49,7 @@ def apply_scanlines(frame, intensity=1):
 
 
 def apply_vhs_noise(frame, intensity=5):
+    """Effetto neve statica tipo VHS"""
     noise = np.random.randint(0, 255, (frame.shape[0], frame.shape[1]), dtype=np.uint8)
     _, mask = cv2.threshold(noise, 230, 255, cv2.THRESH_BINARY)
     white_noise = np.zeros_like(frame)
@@ -52,7 +57,7 @@ def apply_vhs_noise(frame, intensity=5):
     return cv2.addWeighted(frame, 0.8, white_noise, 0.2, 0)
 
 
-# --- Generatore principale di video glitchato ---
+# --- Generatore principale del video glitchato ---
 
 def create_glitch_video_from_image(image_path, output_path="output_video.mp4", duration=5, fps=30):
     base_frame = cv2.imread(image_path)
@@ -88,15 +93,28 @@ def create_glitch_video_from_image(image_path, output_path="output_video.mp4", d
 # --- Interfaccia a riga di comando ---
 
 if __name__ == "__main__":
-    image_path = input("Inserisci il percorso dell'immagine: ")
+    print("=== Glitch Video Studio by Loop507 ===")
+
+    image_path = input("Inserisci il percorso dell'immagine: ").strip()
     if not os.path.exists(image_path):
-        print("Errore: Immagine non trovata.")
+        print("[ERRORE] Immagine non trovata.")
         exit()
 
-    duration = int(input("Durata del video (secondi): "))
-    output_path = input("Nome del video di output (es. output.mp4): ")
+    try:
+        duration = int(input("Durata del video (secondi): "))
+    except ValueError:
+        print("[ERRORE] Devi inserire un numero valido per la durata.")
+        exit()
 
-    print("Generando video glitchato...")
-    result = create_glitch_video_from_image(image_path=image_path, output_path=output_path, duration=duration)
+    output_name = input("Nome del video di output (es. mio_video.mp4): ").strip()
+    if not output_name.endswith(".mp4"):
+        output_name += ".mp4"
 
-    print(f"Video completato: {result}")
+    print("\nGenerando video glitchato...\n")
+    result = create_glitch_video_from_image(
+        image_path=image_path,
+        output_path=output_name,
+        duration=duration
+    )
+
+    print(f"\n✨ Video completato: {result}")
