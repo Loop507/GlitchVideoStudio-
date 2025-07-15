@@ -4,20 +4,61 @@ import cv2
 import subprocess
 import tempfile
 import os
-import random
-from PIL import Image
 from pathlib import Path
+from PIL import Image
 
 # Configurazione pagina
 st.set_page_config(page_title="🎥 Glitch Video Studio", page_icon="🎥", layout="wide")
 
+
+# === FUNZIONI UTILI ===
+
+def apply_pixel_shuffle(frame, intensity=5):
+    """Effetto Pixel Shuffle - Sposta blocchi di pixel in modo casuale"""
+    height, width = frame.shape[:2]
+    block_size = max(1, intensity)
+    blocks = []
+
+    for y in range(0, height, block_size):
+        for x in range(0, width, block_size):
+            end_y = min(y + block_size, height)
+            end_x = min(x + block_size, width)
+            block = frame[y:end_y, x:end_x]
+
+            if block.shape[0] > 0 and block.shape[1] > 0:
+                blocks.append((x, y, block))
+
+    if not blocks:
+        return frame
+
+    random.shuffle(blocks)
+    new_frame = np.zeros_like(frame)
+
+    for i, (orig_x, orig_y, block) in enumerate(blocks):
+        idx = random.randint(0, len(blocks) - 1)
+        target_x, target_y, _ = blocks[idx]
+
+        block_h, block_w = block.shape[:2]
+        end_y = min(target_y + block_h, height)
+        end_x = min(target_x + block_w, width)
+
+        if end_y - target_y < block_h or end_x - target_x < block_w:
+            block = block[:end_y - target_y, :end_x - target_x]
+
+        new_frame[target_y:end_y, target_x:end_x] = block
+
+    return new_frame
+
+
 def generate_placeholder_image(width=640, height=480):
-    """Genera un'immagine RGB casuale (simula un effetto glitch iniziale)"""
+    """Genera un'immagine RGB casuale come placeholder"""
     return np.random.randint(0, 256, (height, width, 3), dtype=np.uint8)
+
 
 def apply_glitch_with_ffmpeg(input_path, output_path, duration=5, fps=30):
     """
-    Usa FFmpeg per applicare effetti glitch e generare un video
+    Usa FFmpeg per applicare effetti glitch e generare un video.
+    Richiede ffmpeg installato nell'ambiente.
     """
     cmd = [
         'ffmpeg',
@@ -32,20 +73,22 @@ def apply_glitch_with_ffmpeg(input_path, output_path, duration=5, fps=30):
                "scale=2*iw:-1,crop=iw/2:ih,"
                "hflip,"
                "eq=contrast=1.5:brightness=0.1,"
-               "format=gray,"  # Simula rumore VHS
-               "vignette=FX=0.2,"
-               "gltransition=duration=0.5:source=fadeblack.mp4",
+               "format=gray,"
+               "vignette=FX=0.2",
         '-pix_fmt', 'yuv420p',
         str(output_path)
     ]
-    
+
     try:
-        subprocess.run(cmd, check=True, capture_output=True)
+        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return True
     except subprocess.CalledProcessError as e:
-        st.error("Errore durante la generazione del video con FFmpeg")
+        st.error("❌ Errore durante la generazione del video con FFmpeg")
         st.code(e.stderr.decode())
         return False
+
+
+# === MAIN APP ===
 
 def main():
     st.title("🎥 Glitch Video Studio")
@@ -73,20 +116,23 @@ def main():
 
     with col2:
         st.subheader("🔍 Anteprima Effetti")
-        st.image(cv2.cvtColor(apply_pixel_shuffle(img_array.copy(), intensity=5), cv2.COLOR_BGR2RGB), caption="Pixel Shuffle", use_column_width=True)
+        preview_img = apply_pixel_shuffle(img_array.copy(), intensity=5)
+        st.image(cv2.cvtColor(preview_img, cv2.COLOR_BGR2RGB), caption="Pixel Shuffle", use_column_width=True)
 
     st.markdown("---")
 
     if st.button("🎥 Genera Video Glitch", type="primary", use_container_width=True):
         with st.spinner("Sto generando il video..."):
 
-            # Salva l'immagine temporaneamente
+            # Crea una directory temporanea
             temp_dir = tempfile.TemporaryDirectory()
             input_img_path = Path(temp_dir.name) / "input.jpg"
             output_video_path = Path(temp_dir.name) / "output.mp4"
 
+            # Salva l'immagine temporaneamente
             cv2.imwrite(str(input_img_path), cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR))
 
+            # Genera il video glitch
             success = apply_glitch_with_ffmpeg(input_img_path, output_video_path, duration=duration, fps=fps)
 
             if success and output_video_path.exists():
@@ -107,6 +153,7 @@ def main():
 
     else:
         st.info("👆 Carica un'immagine o usa quella di default per iniziare!")
+
 
 if __name__ == "__main__":
     main()
