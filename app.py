@@ -22,12 +22,9 @@ def apply_pixel_shuffle(frame, intensity=5):
         idx = np.random.randint(len(blocks))
         tx, ty, _ = blocks[idx]
         bh, bw = block.shape[:2]
-        
         available_h = h - ty
         available_w = w - tx
-        
         block_to_put = block[:available_h, :available_w]
-
         new_frame[ty:ty+block_to_put.shape[0], tx:tx+block_to_put.shape[1]] = block_to_put
     return new_frame
 
@@ -71,15 +68,16 @@ def resize_and_pad(img, target_ratio):
     y_off = (new_h - h) // 2
     x_off = (new_w - w) // 2
     result[y_off:y_off+h, x_off:x_off+w] = img
+    if result.shape[1] % 2 != 0:
+        result = result[:, :-1]
+    if result.shape[0] % 2 != 0:
+        result = result[:-1, :]
     return result
 
 def get_aspect_ratio(res):
-    if res == "1:1":
-        return 1.0
-    elif res == "9:16":
-        return 9/16
-    elif res == "16:9":
-        return 16/9
+    if res == "1:1": return 1.0
+    elif res == "9:16": return 9/16
+    elif res == "16:9": return 16/9
 
 def generate_video_with_ffmpeg(img_path, audio_path, output_path, duration, fps, glitch_effect, intensity, progress_bar):
     filters = []
@@ -90,25 +88,12 @@ def generate_video_with_ffmpeg(img_path, audio_path, output_path, duration, fps,
     elif glitch_effect == "Scanlines VHS":
         filters.append("drawbox=y=0:color=black@0.3:width=iw:height=4:t=fill")
     vf_filter = ",".join(filters) if filters else "null"
-    cmd = [
-        "ffmpeg",
-        "-y",
-        "-loop", "1",
-        "-i", str(img_path),
-    ]
+    cmd = ["ffmpeg", "-y", "-loop", "1", "-i", str(img_path)]
     if audio_path:
         cmd += ["-i", str(audio_path), "-shortest"]
-    cmd += [
-        "-c:v", "libx264",
-        "-preset", "ultrafast",
-        "-t", str(duration),
-        "-r", str(fps),
-        "-vf", vf_filter,
-        "-pix_fmt", "yuv420p",
-        str(output_path)
-    ]
+    cmd += ["-c:v", "libx264", "-preset", "ultrafast", "-t", str(duration), "-r", str(fps), "-vf", vf_filter, "-pix_fmt", "yuv420p", str(output_path)]
     try:
-        process = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        subprocess.run(cmd, capture_output=True, text=True, check=True)
         return True
     except subprocess.CalledProcessError as e:
         st.error("❌ Errore FFmpeg:")
@@ -121,11 +106,8 @@ def main():
 
     uploaded_image = st.sidebar.file_uploader("Carica immagine (obbligatorio)", type=["png", "jpg", "jpeg"])
     uploaded_audio = st.sidebar.file_uploader("Carica audio (opzionale)", type=["mp3", "wav"])
-
     resolution = st.sidebar.selectbox("Seleziona risoluzione", ["1:1", "9:16", "16:9"])
-    glitch_effect = st.sidebar.selectbox("Seleziona effetto glitch",
-                                         ["Pixel Shuffle", "RGB Shift", "Color Inversion", "Analog Noise", "Scanlines VHS"])
-
+    glitch_effect = st.sidebar.selectbox("Seleziona effetto glitch", ["Pixel Shuffle", "RGB Shift", "Color Inversion", "Analog Noise", "Scanlines VHS"])
     duration = st.sidebar.slider("Durata video (secondi)", 1, 30, 5)
     intensity = st.sidebar.slider("Intensità glitch", 1, 10, 5)
 
@@ -166,14 +148,12 @@ def main():
             output_path = Path(temp_dir.name) / "output.mp4"
             cv2.imwrite(str(img_path), cv2.cvtColor(img_np_resized, cv2.COLOR_RGB2BGR))
             progress_bar = st.progress(0)
-            success = generate_video_with_ffmpeg(img_path, audio_path, output_path, duration, 30,
-                                                 glitch_effect, intensity, progress_bar)
+            success = generate_video_with_ffmpeg(img_path, audio_path, output_path, duration, 30, glitch_effect, intensity, progress_bar)
             if success and output_path.exists():
                 video_bytes = output_path.read_bytes()
                 st.success("✅ Video generato!")
                 st.video(video_bytes)
-                st.download_button("⬇️ Scarica Video", data=video_bytes, file_name="glitch_video.mp4",
-                                   mime="video/mp4")
+                st.download_button("⬇️ Scarica Video", data=video_bytes, file_name="glitch_video.mp4", mime="video/mp4")
             else:
                 st.error("❌ Errore generazione video.")
             temp_dir.cleanup()
