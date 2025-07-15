@@ -29,12 +29,13 @@ def apply_pixel_shuffle(frame, intensity=5):
 
 
 def generate_glitch_frames(img_np, n_frames, output_dir):
-    h, w = img_np.shape[:2]
+    progress_bar = st.progress(0)
     for i in range(n_frames):
         intensity = random.randint(5, 15)
         frame = apply_pixel_shuffle(img_np.copy(), intensity=intensity)
         fname = output_dir / f"frame_{i:04d}.jpg"
         cv2.imwrite(str(fname), cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+        progress_bar.progress((i + 1) / n_frames)
 
 
 def get_audio_duration(audio_path):
@@ -81,7 +82,7 @@ def main():
 
     img = Image.open(uploaded_img).convert('RGB')
     img_np = np.array(img)
-    st.image(img_np, caption="Immagine caricata", use_column_width=True)
+    st.image(img_np, caption="Immagine caricata", use_container_width=True)
 
     if generate_btn:
         with st.spinner("🎞 Generazione in corso..."):
