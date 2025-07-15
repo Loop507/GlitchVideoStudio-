@@ -3,14 +3,11 @@ import numpy as np
 import cv2
 import subprocess
 import tempfile
-import os
 import random
 from pathlib import Path
 from PIL import Image
 
-# Config pagina
 st.set_page_config(page_title="🎥 Glitch Video Studio", page_icon="🎥", layout="wide")
-
 
 def apply_pixel_shuffle(frame, intensity=5):
     h, w = frame.shape[:2]
@@ -27,16 +24,19 @@ def apply_pixel_shuffle(frame, intensity=5):
         new_frame[ty:ty+block, tx:tx+block] = src
     return new_frame
 
+def apply_pixel_shuffle_blend(frame, intensity=5, alpha=0.7):
+    shuffled = apply_pixel_shuffle(frame.copy(), intensity)
+    blended = cv2.addWeighted(frame, alpha, shuffled, 1 - alpha, 0)
+    return blended
 
 def generate_glitch_frames(img_np, n_frames, output_dir):
     progress_bar = st.progress(0)
     for i in range(n_frames):
         intensity = random.randint(5, 15)
-        frame = apply_pixel_shuffle(img_np.copy(), intensity=intensity)
+        frame = apply_pixel_shuffle_blend(img_np, intensity=intensity, alpha=0.7)
         fname = output_dir / f"frame_{i:04d}.jpg"
         cv2.imwrite(str(fname), cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
         progress_bar.progress((i + 1) / n_frames)
-
 
 def get_audio_duration(audio_path):
     cmd = [
@@ -51,7 +51,6 @@ def get_audio_duration(audio_path):
     except:
         return None
 
-
 def generate_video_from_frames(output_path, frame_rate, temp_dir, audio_path=None):
     cmd = [
         'ffmpeg', '-y', '-framerate', str(frame_rate),
@@ -63,7 +62,6 @@ def generate_video_from_frames(output_path, frame_rate, temp_dir, audio_path=Non
         cmd += ['-i', str(audio_path), '-shortest', '-c:a', 'aac']
     cmd.append(str(output_path))
     subprocess.run(cmd, check=True)
-
 
 def main():
     st.title("🎥 Glitch Video Studio")
@@ -113,7 +111,6 @@ def main():
                 st.error("❌ Errore durante la generazione del video.")
             finally:
                 temp_dir.cleanup()
-
 
 if __name__ == "__main__":
     main()
