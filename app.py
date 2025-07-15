@@ -154,6 +154,7 @@ def generate_video_from_frames(output_path, frame_rate, temp_dir):
     cmd = [
         'ffmpeg', '-y', '-framerate', str(frame_rate),
         '-i', f'{temp_dir}/frame_%04d.jpg',
+        '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
         '-c:v', 'libx264', '-preset', 'ultrafast',
         '-pix_fmt', 'yuv420p', str(output_path)
     ]
@@ -168,22 +169,29 @@ def main():
     duration = st.sidebar.slider("Durata video (sec)", 1, 20, 5)
     fps = st.sidebar.slider("FPS", 10, 30, 15)
 
+    # Controlli generali
+    st.sidebar.markdown("---")
+    st.sidebar.subheader(":control_knobs: Controlli Globali")
+    global_intensity = st.sidebar.slider("Intensità Globale", 0.1, 2.0, 1.0, 0.1)
+    global_speed = st.sidebar.slider("Velocità Glitch", 0.1, 2.0, 1.0, 0.1)
+    global_color = st.sidebar.slider("Saturazione Colore", 0.0, 2.0, 1.0, 0.1)
+
     st.sidebar.markdown("---")
     st.sidebar.subheader(":game_die: Effetti")
 
     settings = {
         'pixel_shuffle': st.sidebar.checkbox("Pixel Shuffle", value=True),
-        'pixel_shuffle_int': st.sidebar.slider("Intensità Pixel Shuffle", 1, 30, 10),
+        'pixel_shuffle_int': int(10 * global_intensity),
         'rgb_shift': st.sidebar.checkbox("RGB Shift", value=True),
-        'rgb_shift_int': st.sidebar.slider("Entità RGB Shift", 1, 30, 5),
+        'rgb_shift_int': int(5 * global_intensity),
         'invert': st.sidebar.checkbox("Color Inversion", value=False),
         'noise': st.sidebar.checkbox("Analog Noise + Grain", value=False),
-        'noise_int': st.sidebar.slider("Quantità Noise", 0.0, 1.0, 0.1),
+        'noise_int': 0.1 * global_intensity,
         'scanlines': st.sidebar.checkbox("Scanlines CRT", value=False),
         'posterize': st.sidebar.checkbox("Posterize + Contrast", value=False),
-        'posterize_lvl': st.sidebar.slider("Livelli Posterize", 2, 12, 4),
+        'posterize_lvl': max(2, int(6 / global_intensity)),
         'hue_shift': st.sidebar.checkbox("Hue Shift Psichedelico", value=False),
-        'hue_shift_val': st.sidebar.slider("Valore Hue Shift", 0, 180, 30),
+        'hue_shift_val': int(30 * global_intensity),
         'glitch_grid': st.sidebar.checkbox("Glitch Grid Overlay", value=False),
         'jpeg': st.sidebar.checkbox("JPEG Artifacts", value=False),
         'rowcol': st.sidebar.checkbox("Row/Column Shift", value=False),
