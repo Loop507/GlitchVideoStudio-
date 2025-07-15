@@ -4,6 +4,7 @@ import cv2
 import subprocess
 import tempfile
 import os
+import random  # Importiamo random per gli effetti glitch
 from pathlib import Path
 from PIL import Image
 
