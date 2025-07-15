@@ -139,6 +139,11 @@ def generate_glitch_frames(img_np, n_frames, output_dir, settings):
         if settings['posterize']: frame = apply_posterization(frame, settings['posterize_lvl'])
         if settings['hue_shift']: frame = apply_hue_shift(frame, settings['hue_shift_val'])
         if settings['glitch_grid']: frame = apply_glitch_grid(frame)
+        if settings.get('jpeg'): frame = apply_jpeg_artifacts(frame)
+        if settings.get('rowcol'): frame = apply_row_column_shift(frame)
+        if settings.get('wave'): frame = apply_wave_distortion(frame)
+        if settings.get('stretch'): frame = apply_pixel_stretch(frame)
+        if settings.get('edge'): frame = apply_edge_overlay(frame)
 
         fname = output_dir / f"frame_{i:04d}.jpg"
         cv2.imwrite(str(fname), cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
@@ -180,6 +185,11 @@ def main():
         'hue_shift': st.sidebar.checkbox("Hue Shift Psichedelico", value=False),
         'hue_shift_val': st.sidebar.slider("Valore Hue Shift", 0, 180, 30),
         'glitch_grid': st.sidebar.checkbox("Glitch Grid Overlay", value=False),
+        'jpeg': st.sidebar.checkbox("JPEG Artifacts", value=False),
+        'rowcol': st.sidebar.checkbox("Row/Column Shift", value=False),
+        'wave': st.sidebar.checkbox("Wave Distortion", value=False),
+        'stretch': st.sidebar.checkbox("Pixel Stretch", value=False),
+        'edge': st.sidebar.checkbox("Edge Overlay", value=False),
     }
 
     if uploaded_img:
