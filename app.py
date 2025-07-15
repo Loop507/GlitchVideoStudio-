@@ -22,7 +22,15 @@ def apply_pixel_shuffle(frame, intensity=5):
         idx = np.random.randint(len(blocks))
         tx, ty, _ = blocks[idx]
         bh, bw = block.shape[:2]
-        new_frame[ty:ty+bh, tx:tx+bw] = block
+        
+        # Calcola lo spazio disponibile nell’area target
+        available_h = h - ty
+        available_w = w - tx
+        
+        # Taglia il blocco se necessario per evitare overflow
+        block_to_put = block[:available_h, :available_w]
+
+        new_frame[ty:ty+block_to_put.shape[0], tx:tx+block_to_put.shape[1]] = block_to_put
     return new_frame
 
 def apply_rgb_shift(frame, intensity=5):
