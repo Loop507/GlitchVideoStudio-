@@ -75,7 +75,7 @@ def apply_glitch_with_ffmpeg(input_path, output_path, duration=5, fps=30):
                "eq=contrast=1.5:brightness=0.1,"
                "noise=alls=20:allf=t,"
                "format=gray,"
-               "vignette=PI=0.5",
+               "vignette",
         '-pix_fmt', 'yuv420p',
         str(output_path)
     ]
