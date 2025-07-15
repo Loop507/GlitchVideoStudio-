@@ -5,7 +5,6 @@ import random
 import os
 import tempfile
 from PIL import Image
-import io
 
 # Configura la pagina
 st.set_page_config(
@@ -75,13 +74,14 @@ def apply_scanlines(frame, intensity=1):
 def apply_vhs_noise(frame, intensity=5):
     height, width = frame.shape[:2]
     noise = np.random.randint(0, 255, (height, width), dtype=np.uint8)
-    
     _, mask = cv2.threshold(noise, 230, 255, cv2.THRESH_BINARY)
     
-    white_noise = np.zeros_like(frame)
-    if len(frame.shape) == 3:
+    # Crea un rumore bianco con lo stesso numero di canali del frame
+    if len(frame.shape) == 3:  # Immagine a colori (3 canali)
+        white_noise = np.zeros_like(frame)
         white_noise[mask == 255] = [255, 255, 255]
-    else:
+    else:  # Scala di grigi (1 canale)
+        white_noise = np.zeros_like(frame)
         white_noise[mask == 255] = 255
     
     return cv2.addWeighted(frame, 0.8, white_noise, 0.2, 0)
@@ -94,11 +94,11 @@ def create_glitch_video_from_image(image_array, duration=5, fps=30):
     output_path = temp_file.name
     temp_file.close()
     
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    fourcc = cv2.VideoWriter_fourcc(*"avc1")  # Codec più compatibile
     out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
     
     if not out.isOpened():
-        raise RuntimeError(f"Impossibile creare il file video")
+        raise RuntimeError("Impossibile creare il file video")
     
     num_frames = fps * duration
     
@@ -146,13 +146,10 @@ def main():
     )
     
     if uploaded_file is not None:
-        # Converti l'immagine
-        image = Image.open(uploaded_file)
+        # Converti l'immagine in RGB e poi in BGR per OpenCV
+        image = Image.open(uploaded_file).convert("RGB")
         image_array = np.array(image)
-        
-        # Se l'immagine è in RGB, convertila in BGR per OpenCV
-        if len(image_array.shape) == 3 and image_array.shape[2] == 3:
-            image_array = cv2.cvtColor(image_array, cv2.COLOR_RGB2BGR)
+        image_array = cv2.cvtColor(image_array, cv2.COLOR_RGB2BGR)
         
         # Sidebar controls
         duration = st.sidebar.slider("Durata video (secondi)", 1, 30, 5)
@@ -163,7 +160,7 @@ def main():
         
         with col1:
             st.subheader("📸 Immagine originale")
-            st.image(uploaded_file, use_column_width=True)
+            st.image(cv2.cvtColor(image_array, cv2.COLOR_BGR2RGB), use_column_width=True)
         
         with col2:
             st.subheader("🎬 Anteprima effetti")
