@@ -1,20 +1,26 @@
-# GlitchVideoStudio.py
-# Copyright (c) 2025 Loop507
-# MIT License - https://opensource.org/licenses/MIT 
+import streamlit as st
 import cv2
 import numpy as np
 import random
 import os
-import sys
+import tempfile
+from PIL import Image
+import io
+
+# Configura la pagina
+st.set_page_config(
+    page_title="Glitch Video Studio",
+    page_icon="🎥",
+    layout="wide"
+)
 
 def apply_pixel_shuffle(frame, intensity=5):
     height, width = frame.shape[:2]
-    block_size = max(1, intensity)  # Evita blocchi di dimensione 0
+    block_size = max(1, intensity)
     blocks = []
     
     for y in range(0, height, block_size):
         for x in range(0, width, block_size):
-            # Calcola le dimensioni effettive del blocco
             end_y = min(y + block_size, height)
             end_x = min(x + block_size, width)
             block = frame[y:end_y, x:end_x]
@@ -29,16 +35,13 @@ def apply_pixel_shuffle(frame, intensity=5):
     new_frame = np.zeros_like(frame)
     
     for i, (orig_x, orig_y, block) in enumerate(blocks):
-        # Prendi un blocco casuale dalla lista
         idx = random.randint(0, len(blocks) - 1)
         target_x, target_y, _ = blocks[idx]
         
-        # Calcola le dimensioni per evitare overflow
         block_h, block_w = block.shape[:2]
         end_y = min(target_y + block_h, height)
         end_x = min(target_x + block_w, width)
         
-        # Adatta il blocco se necessario
         if end_y - target_y < block_h or end_x - target_x < block_w:
             block = block[:end_y - target_y, :end_x - target_x]
         
@@ -73,43 +76,39 @@ def apply_vhs_noise(frame, intensity=5):
     height, width = frame.shape[:2]
     noise = np.random.randint(0, 255, (height, width), dtype=np.uint8)
     
-    # Correzione della sintassi per threshold
     _, mask = cv2.threshold(noise, 230, 255, cv2.THRESH_BINARY)
     
     white_noise = np.zeros_like(frame)
-    if len(frame.shape) == 3:  # Immagine a colori
+    if len(frame.shape) == 3:
         white_noise[mask == 255] = [255, 255, 255]
-    else:  # Immagine in scala di grigi
+    else:
         white_noise[mask == 255] = 255
     
     return cv2.addWeighted(frame, 0.8, white_noise, 0.2, 0)
 
-def create_glitch_video_from_image(image_path, output_path="output_video.mp4", duration=5, fps=30):
-    # Verifica che il file esista
-    if not os.path.exists(image_path):
-        raise FileNotFoundError(f"Immagine non trovata: {image_path}")
+def create_glitch_video_from_image(image_array, duration=5, fps=30):
+    height, width = image_array.shape[:2]
     
-    base_frame = cv2.imread(image_path)
-    if base_frame is None:
-        raise ValueError(f"Impossibile caricare l'immagine: {image_path}")
+    # Crea un file temporaneo per il video
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+    output_path = temp_file.name
+    temp_file.close()
     
-    height, width = base_frame.shape[:2]
-    
-    # Usa un codec più compatibile
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
     
-    # Verifica che il writer sia stato inizializzato correttamente
     if not out.isOpened():
-        raise RuntimeError(f"Impossibile creare il file video: {output_path}")
+        raise RuntimeError(f"Impossibile creare il file video")
     
     num_frames = fps * duration
-    print(f"Generando {num_frames} frame...")
+    
+    progress_bar = st.progress(0)
+    status_text = st.empty()
     
     for i in range(num_frames):
-        frame = base_frame.copy()
+        frame = image_array.copy()
         
-        # Applica gli effetti glitch in modo più controllato
+        # Applica gli effetti glitch
         if i % 3 == 0:
             frame = apply_pixel_shuffle(frame, intensity=random.randint(3, 8))
         if i % 4 == 0:
@@ -121,55 +120,123 @@ def create_glitch_video_from_image(image_path, output_path="output_video.mp4", d
         
         out.write(frame)
         
-        # Mostra il progresso
-        if i % 30 == 0:
-            progress = (i / num_frames) * 100
-            print(f"Progresso: {progress:.1f}%")
+        # Aggiorna la progress bar
+        progress = (i + 1) / num_frames
+        progress_bar.progress(progress)
+        status_text.text(f"Generando frame {i+1}/{num_frames}")
     
     out.release()
-    print(f"Video glitch creato: {output_path}")
+    progress_bar.empty()
+    status_text.empty()
+    
     return output_path
 
 def main():
-    print("=== Glitch Video Studio by Loop507 ===")
+    st.title("🎥 Glitch Video Studio")
+    st.markdown("*by Loop507*")
+    st.markdown("---")
     
-    # Input del percorso dell'immagine
-    image_path = input("Inserisci il percorso dell'immagine: ").strip()
+    # Sidebar per i controlli
+    st.sidebar.header("⚙️ Impostazioni")
     
-    # Rimuovi eventuali virgolette
-    image_path = image_path.strip('"\'')
+    # Upload dell'immagine
+    uploaded_file = st.sidebar.file_uploader(
+        "Carica un'immagine",
+        type=['png', 'jpg', 'jpeg', 'bmp', 'tiff']
+    )
     
-    if not os.path.exists(image_path):
-        print("[ERRORE] Immagine non trovata.")
-        sys.exit(1)
+    if uploaded_file is not None:
+        # Converti l'immagine
+        image = Image.open(uploaded_file)
+        image_array = np.array(image)
+        
+        # Se l'immagine è in RGB, convertila in BGR per OpenCV
+        if len(image_array.shape) == 3 and image_array.shape[2] == 3:
+            image_array = cv2.cvtColor(image_array, cv2.COLOR_RGB2BGR)
+        
+        # Sidebar controls
+        duration = st.sidebar.slider("Durata video (secondi)", 1, 30, 5)
+        fps = st.sidebar.slider("Frame per secondo", 10, 60, 30)
+        
+        # Layout a colonne
+        col1, col2 = st.columns([1, 1])
+        
+        with col1:
+            st.subheader("📸 Immagine originale")
+            st.image(uploaded_file, use_column_width=True)
+        
+        with col2:
+            st.subheader("🎬 Anteprima effetti")
+            
+            # Mostra anteprime degli effetti
+            preview_frame = image_array.copy()
+            
+            effect_tabs = st.tabs(["Pixel Shuffle", "Color Shift", "Scanlines", "VHS Noise"])
+            
+            with effect_tabs[0]:
+                preview_shuffle = apply_pixel_shuffle(preview_frame.copy(), intensity=5)
+                preview_shuffle_rgb = cv2.cvtColor(preview_shuffle, cv2.COLOR_BGR2RGB)
+                st.image(preview_shuffle_rgb, use_column_width=True)
+            
+            with effect_tabs[1]:
+                preview_color = apply_color_shift(preview_frame.copy(), intensity=20)
+                preview_color_rgb = cv2.cvtColor(preview_color, cv2.COLOR_BGR2RGB)
+                st.image(preview_color_rgb, use_column_width=True)
+            
+            with effect_tabs[2]:
+                preview_scan = apply_scanlines(preview_frame.copy())
+                preview_scan_rgb = cv2.cvtColor(preview_scan, cv2.COLOR_BGR2RGB)
+                st.image(preview_scan_rgb, use_column_width=True)
+            
+            with effect_tabs[3]:
+                preview_vhs = apply_vhs_noise(preview_frame.copy())
+                preview_vhs_rgb = cv2.cvtColor(preview_vhs, cv2.COLOR_BGR2RGB)
+                st.image(preview_vhs_rgb, use_column_width=True)
+        
+        # Pulsante per generare il video
+        st.markdown("---")
+        
+        if st.button("🎥 Genera Video Glitch", type="primary", use_container_width=True):
+            with st.spinner("Generando video glitch..."):
+                try:
+                    video_path = create_glitch_video_from_image(
+                        image_array, 
+                        duration=duration, 
+                        fps=fps
+                    )
+                    
+                    st.success("✅ Video generato con successo!")
+                    
+                    # Leggi il file video e permetti il download
+                    with open(video_path, 'rb') as video_file:
+                        video_bytes = video_file.read()
+                    
+                    st.download_button(
+                        label="⬇️ Scarica Video Glitch",
+                        data=video_bytes,
+                        file_name=f"glitch_video_{duration}s.mp4",
+                        mime="video/mp4"
+                    )
+                    
+                    # Pulisci il file temporaneo
+                    os.unlink(video_path)
+                    
+                except Exception as e:
+                    st.error(f"❌ Errore durante la generazione: {str(e)}")
     
-    # Input della durata
-    try:
-        duration = int(input("Durata del video (secondi): "))
-        if duration <= 0:
-            print("[ERRORE] La durata deve essere un numero positivo.")
-            sys.exit(1)
-    except ValueError:
-        print("[ERRORE] Devi inserire un numero valido per la durata.")
-        sys.exit(1)
-    
-    # Input del nome del file di output
-    output_name = input("Nome del video di output (es. mio_video.mp4): ").strip()
-    if not output_name.endswith(".mp4"):
-        output_name += ".mp4"
-    
-    print("\nGenerando video glitchato...\n")
-    
-    try:
-        result = create_glitch_video_from_image(
-            image_path=image_path, 
-            output_path=output_name, 
-            duration=duration
-        )
-        print(f"\n✨ Video completato: {result}")
-    except Exception as e:
-        print(f"[ERRORE] Si è verificato un errore: {e}")
-        sys.exit(1)
+    else:
+        st.info("👆 Carica un'immagine dalla sidebar per iniziare!")
+        
+        # Mostra esempio
+        st.markdown("---")
+        st.subheader("🎯 Come funziona")
+        st.markdown("""
+        1. **Carica un'immagine** dalla sidebar
+        2. **Regola le impostazioni** (durata e FPS)
+        3. **Visualizza l'anteprima** degli effetti
+        4. **Genera il video** con gli effetti glitch
+        5. **Scarica il risultato** sul tuo dispositivo
+        """)
 
 if __name__ == "__main__":
     main()
