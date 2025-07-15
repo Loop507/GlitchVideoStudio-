@@ -23,11 +23,9 @@ def apply_pixel_shuffle(frame, intensity=5):
         tx, ty, _ = blocks[idx]
         bh, bw = block.shape[:2]
         
-        # Calcola lo spazio disponibile nell’area target
         available_h = h - ty
         available_w = w - tx
         
-        # Taglia il blocco se necessario per evitare overflow
         block_to_put = block[:available_h, :available_w]
 
         new_frame[ty:ty+block_to_put.shape[0], tx:tx+block_to_put.shape[1]] = block_to_put
@@ -109,21 +107,13 @@ def generate_video_with_ffmpeg(img_path, audio_path, output_path, duration, fps,
         "-pix_fmt", "yuv420p",
         str(output_path)
     ]
-    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    while True:
-        line = process.stderr.readline()
-        if line == '' and process.poll() is not None:
-            break
-        if "frame=" in line:
-            parts = line.strip().split()
-            for p in parts:
-                if p.startswith("frame="):
-                    frame_num = int(p.split("=")[1])
-                    progress = min(frame_num / (duration*fps), 1.0)
-                    progress_bar.progress(progress)
-                    break
-    process.wait()
-    return process.returncode == 0
+    try:
+        process = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        return True
+    except subprocess.CalledProcessError as e:
+        st.error("❌ Errore FFmpeg:")
+        st.code(e.stderr)
+        return False
 
 def main():
     st.title("🎥 Glitch Video Studio Minimal")
