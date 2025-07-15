@@ -70,12 +70,12 @@ def apply_glitch_with_ffmpeg(input_path, output_path, duration=5, fps=30):
         '-t', str(duration),
         '-r', str(fps),
         '-vf', f"fps={fps},"
-               "geq='rand(0)*255':128:128,"
                "scale=2*iw:-1,crop=iw/2:ih,"
                "hflip,"
                "eq=contrast=1.5:brightness=0.1,"
+               "noise=alls=20:allf=t,"
                "format=gray,"
-               "vignette=FX=0.2",
+               "vignette=PI=0.5",
         '-pix_fmt', 'yuv420p',
         str(output_path)
     ]
