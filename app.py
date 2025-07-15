@@ -7,7 +7,6 @@ import os
 import random
 from pathlib import Path
 from PIL import Image
-from pydub import AudioSegment
 
 # Config pagina
 st.set_page_config(page_title="🎥 Glitch Video Studio", page_icon="🎥", layout="wide")
@@ -29,27 +28,27 @@ def apply_pixel_shuffle(frame, intensity=5):
     return new_frame
 
 
-def analyze_audio_rms(audio_path, duration_sec, fps):
-    audio = AudioSegment.from_file(audio_path)
-    frame_ms = 1000 / fps
-    rms_values = []
-    for i in range(int(duration_sec * fps)):
-        start = int(i * frame_ms)
-        end = int(start + frame_ms)
-        segment = audio[start:end]
-        rms = segment.rms
-        rms_values.append(rms)
-    max_rms = max(rms_values) if rms_values else 1
-    return [min(1, r / max_rms) for r in rms_values]
-
-
-def generate_glitch_frames(img_np, n_frames, output_dir, rms_list=None):
+def generate_glitch_frames(img_np, n_frames, output_dir):
     h, w = img_np.shape[:2]
     for i in range(n_frames):
-        intensity = int(5 + (rms_list[i] * 15)) if rms_list else random.randint(5, 15)
+        intensity = random.randint(5, 15)
         frame = apply_pixel_shuffle(img_np.copy(), intensity=intensity)
         fname = output_dir / f"frame_{i:04d}.jpg"
         cv2.imwrite(str(fname), cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+
+
+def get_audio_duration(audio_path):
+    cmd = [
+        "ffprobe", "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        str(audio_path)
+    ]
+    try:
+        output = subprocess.check_output(cmd, stderr=subprocess.DEVNULL).decode().strip()
+        return float(output)
+    except:
+        return None
 
 
 def generate_video_from_frames(output_path, frame_rate, temp_dir, audio_path=None):
@@ -88,17 +87,19 @@ def main():
         with st.spinner("🎞 Generazione in corso..."):
             temp_dir = tempfile.TemporaryDirectory()
             output_dir = Path(temp_dir.name)
-            n_frames = duration * fps
-
             audio_path = None
-            rms_list = None
+            audio_duration = None
+
             if uploaded_audio:
                 audio_path = output_dir / "audio.mp3"
                 with open(audio_path, 'wb') as f:
                     f.write(uploaded_audio.read())
-                rms_list = analyze_audio_rms(audio_path, duration, fps)
+                audio_duration = get_audio_duration(audio_path)
 
-            generate_glitch_frames(img_np, n_frames, output_dir, rms_list)
+            video_duration = int(audio_duration) if audio_duration else duration
+            n_frames = video_duration * fps
+
+            generate_glitch_frames(img_np, n_frames, output_dir)
             video_path = output_dir / "glitch_video.mp4"
 
             try:
