@@ -8,13 +8,41 @@ from pathlib import Path
 from PIL import Image
 import math
 
-st.set_page_config(page_title="🎥 Glitch Video Studio", page_icon="🎥", layout="wide")
+st.set_page_config(page_title="🎥 Glitch Video Studio - Extra Effects", page_icon="🎥", layout="wide")
 
-# --- EFFETTI GLITCH ---
+# === FUNZIONI UTILI ===
+
+def resize_and_pad(img, target_ratio):
+    h, w = img.shape[:2]
+    current_ratio = w / h
+    if abs(current_ratio - target_ratio) < 0.01:
+        return img
+    if current_ratio > target_ratio:
+        new_w = w
+        new_h = int(w / target_ratio)
+    else:
+        new_h = h
+        new_w = int(h * target_ratio)
+    resized_img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+    top = (new_h - h) // 2
+    bottom = new_h - h - top
+    left = (new_w - w) // 2
+    right = new_w - w - left
+    padded = cv2.copyMakeBorder(resized_img, top, bottom, left, right, cv2.BORDER_CONSTANT, value=[0,0,0])
+    return padded
+
+def apply_3d_motion(frame, angle_deg, scale, tx, ty):
+    h, w = frame.shape[:2]
+    M = cv2.getRotationMatrix2D((w/2, h/2), angle_deg, scale)
+    M[:,2] += [tx, ty]
+    moved = cv2.warpAffine(frame, M, (w, h), borderMode=cv2.BORDER_REFLECT)
+    return moved
+
+# --- EFFETTI BASE ---
 
 def apply_pixel_shuffle(frame, intensity=5):
     h, w = frame.shape[:2]
-    block = max(1, int(min(h, w) / intensity))
+    block = max(1, int(min(h, w) / max(5, intensity)))
     new_frame = frame.copy()
     for _ in range(intensity * 2):
         x = random.randint(0, w - block)
@@ -27,8 +55,9 @@ def apply_pixel_shuffle(frame, intensity=5):
         new_frame[ty:ty+block, tx:tx+block] = src
     return new_frame
 
-def apply_rgb_shift(frame, max_shift=10):
+def apply_rgb_shift(frame, intensity=5):
     h, w = frame.shape[:2]
+    max_shift = max(1, intensity)
     shift_x = random.randint(-max_shift, max_shift)
     shift_y = random.randint(-max_shift, max_shift)
     b, g, r = cv2.split(frame)
@@ -36,212 +65,143 @@ def apply_rgb_shift(frame, max_shift=10):
         return cv2.warpAffine(c, np.float32([[1, 0, dx], [0, 1, dy]]), (w, h), borderMode=cv2.BORDER_REPLICATE)
     return cv2.merge([b, shift(g, 0, shift_y), shift(r, shift_x, 0)])
 
-def apply_color_inversion(frame):
-    return cv2.bitwise_not(frame)
+def apply_color_inversion(frame, intensity=1):
+    inv = cv2.bitwise_not(frame)
+    return cv2.addWeighted(frame, 1 - intensity, inv, intensity, 0)
 
-def apply_analog_noise(frame, amount=0.1):
-    noise = np.random.randn(*frame.shape) * 255 * amount
+def apply_analog_noise(frame, intensity=0.1):
+    noise = np.random.randn(*frame.shape) * 255 * intensity
     noisy = np.clip(frame + noise, 0, 255).astype(np.uint8)
     return noisy
 
-def apply_scanlines(frame):
-    for y in range(0, frame.shape[0], 2):
-        frame[y:y+1, :] = frame[y:y+1, :] // 2
+def apply_scanlines(frame, intensity=0.5):
+    h = frame.shape[0]
+    step = max(1, int(2 / intensity)) if intensity > 0 else 1000
+    for y in range(0, h, step):
+        frame[y:y+1, :] = (frame[y:y+1, :] * (1 - intensity)).astype(np.uint8)
     return frame
 
 def apply_posterization(frame, levels=4):
-    div = 256 // levels
+    div = max(1, 256 // levels)
     return (frame // div * div).astype(np.uint8)
 
-def apply_ascii_effect(frame):
-    gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
-    chars = np.asarray(list(' .:-=+*%@#'))
-    scaled = cv2.resize(gray, (80, 45))
-    indices = (scaled / 255 * (len(chars) - 1)).astype(np.uint8)
-    ascii_art = "\n".join("".join(chars[c] for c in row) for row in indices)
-    ascii_img = np.ones_like(frame) * 255
-    y0 = 20
-    for i, line in enumerate(ascii_art.splitlines()):
-        y = y0 + i * 10
-        cv2.putText(ascii_img, line, (5, y), cv2.FONT_HERSHEY_PLAIN, 0.8, (0, 0, 0), 1)
-    return ascii_img
+def apply_pixel_stretch(frame, intensity=5):
+    h, w = frame.shape[:2]
+    stretched = frame.copy()
+    for _ in range(intensity):
+        y = random.randint(0, h - 1)
+        col = random.randint(0, w - 1)
+        stretched[y] = stretched[y, col]
+    return stretched
 
-def apply_jpeg_artifacts(frame):
-    encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 10]
-    _, encimg = cv2.imencode('.jpg', frame, encode_param)
-    return cv2.imdecode(encimg, 1)
-
-def apply_row_column_shift(frame):
+def apply_row_column_shift(frame, intensity=5):
     h, w = frame.shape[:2]
     frame = frame.copy()
-    # Shift random rows horizontally
-    for _ in range(5):
+    for _ in range(intensity):
         row = random.randint(0, h - 2)
         shift = random.randint(-10, 10)
         frame[row] = np.roll(frame[row], shift, axis=0)
-    # Shift random cols vertically
-    for _ in range(5):
-        col = random.randint(0, w - 2)
-        shift = random.randint(-10, 10)
-        frame[:, col] = np.roll(frame[:, col], shift, axis=0)
     return frame
 
-def apply_wave_distortion(frame):
-    h, w = frame.shape[:2]
-    distorted = np.zeros_like(frame)
-    for y in range(h):
-        offset = int(10.0 * math.sin(2 * math.pi * y / 64))
-        distorted[y] = np.roll(frame[y], offset, axis=0)
-    return distorted
-
-def apply_pixel_stretch(frame):
-    h, w = frame.shape[:2]
-    stretched = frame.copy()
-    for _ in range(5):
-        y = random.randint(0, h - 1)
-        x = random.randint(0, w - 1)
-        stretched[y] = stretched[y, x]
-    return stretched
-
-def apply_edge_overlay(frame):
+def apply_edge_overlay(frame, intensity=0.2):
     edges = cv2.Canny(cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY), 100, 200)
     edge_colored = cv2.cvtColor(edges, cv2.COLOR_GRAY2RGB)
-    return cv2.addWeighted(frame, 0.8, edge_colored, 0.2, 0)
+    return cv2.addWeighted(frame, 1 - intensity, edge_colored, intensity, 0)
 
-def apply_hue_shift(frame):
+def apply_hue_shift(frame, intensity=30):
     hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
-    hsv[..., 0] = (hsv[..., 0] + random.randint(10, 100)) % 180
+    hsv[..., 0] = (hsv[..., 0] + intensity) % 180
     return cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
 
-def apply_glitch_grid(frame):
-    h, w = frame.shape[:2]
-    grid = frame.copy()
-    step = 20
-    for y in range(0, h, step):
-        cv2.line(grid, (0, y), (w, y), (0, 255, 255), 1)
-    for x in range(0, w, step):
-        cv2.line(grid, (x, 0), (x, h), (0, 255, 255), 1)
-    return cv2.addWeighted(frame, 0.9, grid, 0.1, 0)
+# === EFFETTI EXTRA RICHIESTI ===
 
-def apply_band_noise(frame):
+def apply_band_noise(frame, intensity=0.3):
+    """Disturbo a bande colorate orizzontali frastagliate"""
     h, w = frame.shape[:2]
+    band_height = max(2, int(h * 0.02))
     frame = frame.copy()
-    for _ in range(15):
-        y = random.randint(0, h - 1)
-        thickness = random.randint(1, 3)
-        color = tuple(np.random.randint(0, 256, 3).tolist())
-        cv2.line(frame, (0, y), (w, y), color, thickness)
+    for y in range(0, h, band_height * 2):
+        if random.random() > 1 - intensity:
+            noise = np.random.randint(0, 255, (band_height, w, 3), dtype=np.uint8)
+            frame[y:y+band_height] = cv2.addWeighted(frame[y:y+band_height], 0.5, noise, 0.5, 0)
     return frame
 
-def apply_broken_lines(frame):
-    h, w = frame.shape[:2]
-    frame = frame.copy()
-    for _ in range(20):
-        x = random.randint(0, w - 10)
-        y = random.randint(0, h - 10)
-        length = random.randint(5, 30)
-        thickness = random.randint(1, 3)
-        color = (255, 255, 255) if random.random() > 0.8 else (random.randint(0,255), 0, 0)
-        cv2.line(frame, (x, y), (x + length, y), color, thickness)
-        cv2.line(frame, (x, y), (x, y + length), color, thickness)
-    return frame
-
-def apply_circuit_grid(frame):
+def apply_broken_lines(frame, intensity=0.3):
+    """Linee verticali e orizzontali spezzate b/n con tocchi di colore"""
     h, w = frame.shape[:2]
     frame = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
-    grid = np.zeros_like(frame)
-    step = 15
+    frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
+    step = max(3, int(20 * (1 - intensity)))
     for y in range(0, h, step):
-        cv2.line(grid, (0, y), (w, y), 150, 1)
+        if random.random() < intensity:
+            x_break = random.randint(0, w-10)
+            frame[y, x_break:x_break+10] = 255 - frame[y, x_break:x_break+10]
     for x in range(0, w, step):
-        cv2.line(grid, (x, 0), (x, h), 150, 1)
-    grid_colored = cv2.cvtColor(grid, cv2.COLOR_GRAY2RGB)
-    frame_color = cv2.addWeighted(cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB), 0.7, grid_colored, 0.3, 0)
-    return frame_color
+        if random.random() < intensity:
+            y_break = random.randint(0, h-10)
+            frame[y_break:y_break+10, x] = 255 - frame[y_break:y_break+10, x]
+    return frame
 
-def apply_organic_movement(frame, frame_idx, max_shift=5, max_rot=2, max_zoom=0.05):
+def apply_digital_grid(frame, intensity=0.3):
+    """Linee e forme geometriche in scala di grigi + tocchi di colore"""
     h, w = frame.shape[:2]
-    # Traslazioni leggere con sinusoidi per movimento organico
-    dx = int(max_shift * math.sin(2 * math.pi * frame_idx / 30))
-    dy = int(max_shift * math.cos(2 * math.pi * frame_idx / 25))
-    M_trans = np.float32([[1, 0, dx], [0, 1, dy]])
-    moved = cv2.warpAffine(frame, M_trans, (w, h), borderMode=cv2.BORDER_REFLECT)
+    grid = np.zeros_like(frame)
+    step = max(10, int(50 * (1 - intensity)))
+    for y in range(0, h, step):
+        cv2.line(grid, (0, y), (w, y), (int(255*intensity), int(255*intensity), int(255*intensity)), 1)
+    for x in range(0, w, step):
+        cv2.line(grid, (x, 0), (x, h), (int(255*intensity), int(255*intensity*0.7), int(255*intensity*0.7)), 1)
+    return cv2.addWeighted(frame, 1 - intensity, grid, intensity, 0)
 
-    # Rotazione leggera
-    angle = max_rot * math.sin(2 * math.pi * frame_idx / 40)
-    M_rot = cv2.getRotationMatrix2D((w//2, h//2), angle, 1)
-
-    moved = cv2.warpAffine(moved, M_rot, (w, h), borderMode=cv2.BORDER_REFLECT)
-
-    # Zoom leggero (scaling)
-    zoom_factor = 1 + max_zoom * math.sin(2 * math.pi * frame_idx / 50)
-    center = (w//2, h//2)
-    M_zoom = cv2.getRotationMatrix2D(center, 0, zoom_factor)
-    moved = cv2.warpAffine(moved, M_zoom, (w, h), borderMode=cv2.BORDER_REFLECT)
-
-    return moved
-
-def blend_frames(base, overlay, alpha=0.5):
-    return cv2.addWeighted(base, 1 - alpha, overlay, alpha, 0)
-
-# --- GENERA FRAME ---
+# === GENERA FRAME ===
 def generate_glitch_frames(img_np, n_frames, output_dir, settings):
     progress_bar = st.progress(0)
+
     for i in range(n_frames):
-        # Movimento organico base
-        base_frame = apply_organic_movement(img_np, i)
+        frame = img_np.copy()
 
-        glitch_frame = base_frame.copy()
+        # Movimento 3D organico della foto principale
+        angle = 2 * math.sin(i / n_frames * 2 * math.pi) * settings['motion_angle']
+        scale = 1 + 0.02 * math.sin(i / n_frames * 4 * math.pi) * settings['motion_zoom']
+        tx = int(5 * math.sin(i / n_frames * 3 * math.pi) * settings['motion_tx'])
+        ty = int(5 * math.sin(i / n_frames * 5 * math.pi) * settings['motion_ty'])
+        frame = apply_3d_motion(frame, angle, scale, tx, ty)
 
-        # Applicazione effetti glitch come layer sovrapposti
-        overlays = []
+        # Effetti glitch base con intensità
+        if settings['pixel_shuffle']:
+            frame = apply_pixel_shuffle(frame, intensity=settings['pixel_shuffle_intensity'])
+        if settings['rgb_shift']:
+            frame = apply_rgb_shift(frame, intensity=settings['rgb_shift_intensity'])
+        if settings['invert']:
+            frame = apply_color_inversion(frame, intensity=settings['invert_intensity'])
+        if settings['noise']:
+            frame = apply_analog_noise(frame, intensity=settings['noise_intensity'])
+        if settings['scanlines']:
+            frame = apply_scanlines(frame, intensity=settings['scanlines_intensity'])
+        if settings['posterize']:
+            frame = apply_posterization(frame, levels=settings['posterize_levels'])
+        if settings['pixel_stretch']:
+            frame = apply_pixel_stretch(frame, intensity=settings['pixel_stretch_intensity'])
+        if settings['row_column_shift']:
+            frame = apply_row_column_shift(frame, intensity=settings['row_column_shift_intensity'])
+        if settings['edge_overlay']:
+            frame = apply_edge_overlay(frame, intensity=settings['edge_overlay_intensity'])
+        if settings['hue_shift']:
+            frame = apply_hue_shift(frame, intensity=settings['hue_shift_intensity'])
 
-        if settings.get('pixel_shuffle', False):
-            overlays.append(apply_pixel_shuffle(base_frame, intensity=random.randint(5, 30)))
-        if settings.get('rgb_shift', False):
-            overlays.append(apply_rgb_shift(base_frame))
-        if settings.get('invert', False):
-            overlays.append(apply_color_inversion(base_frame))
-        if settings.get('noise', False):
-            overlays.append(apply_analog_noise(base_frame))
-        if settings.get('scanlines', False):
-            overlays.append(apply_scanlines(base_frame))
-        if settings.get('posterize', False):
-            overlays.append(apply_posterization(base_frame))
-        if settings.get('ascii', False):
-            overlays.append(apply_ascii_effect(base_frame))
-        if settings.get('jpeg', False):
-            overlays.append(apply_jpeg_artifacts(base_frame))
-        if settings.get('row_col_shift', False):
-            overlays.append(apply_row_column_shift(base_frame))
-        if settings.get('wave_distortion', False):
-            overlays.append(apply_wave_distortion(base_frame))
-        if settings.get('pixel_stretch', False):
-            overlays.append(apply_pixel_stretch(base_frame))
-        if settings.get('edge_overlay', False):
-            overlays.append(apply_edge_overlay(base_frame))
-        if settings.get('hue_shift', False):
-            overlays.append(apply_hue_shift(base_frame))
-        if settings.get('glitch_grid', False):
-            overlays.append(apply_glitch_grid(base_frame))
-        if settings.get('band_noise', False):
-            overlays.append(apply_band_noise(base_frame))
-        if settings.get('broken_lines', False):
-            overlays.append(apply_broken_lines(base_frame))
-        if settings.get('circuit_grid', False):
-            overlays.append(apply_circuit_grid(base_frame))
+        # Effetti extra
+        if settings['band_noise']:
+            frame = apply_band_noise(frame, intensity=settings['band_noise_intensity'])
+        if settings['broken_lines']:
+            frame = apply_broken_lines(frame, intensity=settings['broken_lines_intensity'])
+        if settings['digital_grid']:
+            frame = apply_digital_grid(frame, intensity=settings['digital_grid_intensity'])
 
-        # Mischia overlay e fonde
-        random.shuffle(overlays)
-        for ov in overlays:
-            glitch_frame = blend_frames(glitch_frame, ov, alpha=0.4)
-
-        # Salva frame
         fname = output_dir / f"frame_{i:04d}.jpg"
-        cv2.imwrite(str(fname), cv2.cvtColor(glitch_frame, cv2.COLOR_RGB2BGR))
+        cv2.imwrite(str(fname), cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
         progress_bar.progress((i + 1) / n_frames)
 
-# --- GENERA VIDEO ---
+# === GENERA VIDEO ===
 def generate_video_from_frames(output_path, frame_rate, temp_dir):
     cmd = [
         'ffmpeg', '-y', '-framerate', str(frame_rate),
@@ -252,7 +212,7 @@ def generate_video_from_frames(output_path, frame_rate, temp_dir):
     ]
     subprocess.run(cmd, check=True)
 
-# --- MAIN APP ---
+# === MAIN APP ===
 def main():
     st.title(":camera: Glitch Video Studio")
     st.sidebar.header(":gear: Impostazioni")
@@ -260,40 +220,62 @@ def main():
     uploaded_img = st.sidebar.file_uploader("Carica immagine", type=["png", "jpg", "jpeg"])
     duration = st.sidebar.slider("Durata video (sec)", 1, 20, 5)
     fps = st.sidebar.slider("FPS", 10, 30, 15)
+    ratio_choice = st.sidebar.selectbox("Proporzione video", ["1:1", "9:16", "16:9"])
+    ratio_options = {
+        "1:1": 1.0,
+        "9:16": 9/16,
+        "16:9": 16/9,
+    }
 
     st.sidebar.markdown("---")
     st.sidebar.subheader(":game_die: Effetti")
 
     settings = {
         'pixel_shuffle': st.sidebar.checkbox("Pixel Shuffle", value=True),
+        'pixel_shuffle_intensity': st.sidebar.slider("Intensità Pixel Shuffle", 1, 30, 10),
+
         'rgb_shift': st.sidebar.checkbox("RGB Shift", value=True),
+        'rgb_shift_intensity': st.sidebar.slider("Intensità RGB Shift", 1, 20, 10),
+
         'invert': st.sidebar.checkbox("Color Inversion", value=False),
+        'invert_intensity': st.sidebar.slider("Intensità Color Inversion", 0, 1, 0, step=0.1),
+
         'noise': st.sidebar.checkbox("Analog Noise + Grain", value=False),
+        'noise_intensity': st.sidebar.slider("Intensità Analog Noise", 0.0, 1.0, 0.2),
+
         'scanlines': st.sidebar.checkbox("Scanlines CRT", value=False),
+        'scanlines_intensity': st.sidebar.slider("Intensità Scanlines", 0.0, 1.0, 0.3),
+
         'posterize': st.sidebar.checkbox("Posterize + Contrast", value=False),
-        'ascii': st.sidebar.checkbox("ASCII Art", value=False),
-        'jpeg': st.sidebar.checkbox("JPEG Compression Artifacts", value=False),
-        'row_col_shift': st.sidebar.checkbox("Row/Column Shift", value=False),
-        'wave_distortion': st.sidebar.checkbox("Wave Distortion", value=False),
+        'posterize_levels': st.sidebar.slider("Livelli Posterize", 2, 10, 4),
+
         'pixel_stretch': st.sidebar.checkbox("Pixel Stretch", value=False),
+        'pixel_stretch_intensity': st.sidebar.slider("Intensità Pixel Stretch", 1, 20, 5),
+
+        'row_column_shift': st.sidebar.checkbox("Row/Column Shift", value=False),
+        'row_column_shift_intensity': st.sidebar.slider("Intensità Row/Column Shift", 1, 20, 5),
+
         'edge_overlay': st.sidebar.checkbox("Edge Detection Overlay", value=False),
-        'hue_shift': st.sidebar.checkbox("Hue Shift / Colori Psichedelici", value=False),
-        'glitch_grid': st.sidebar.checkbox("Glitch Grid Overlay", value=False),
+        'edge_overlay_intensity': st.sidebar.slider("Intensità Edge Overlay", 0.0, 1.0, 0.2),
+
+        'hue_shift': st.sidebar.checkbox("Colori Psichedelici", value=False),
+        'hue_shift_intensity': st.sidebar.slider("Intensità Hue Shift", 1, 180, 30),
+
         'band_noise': st.sidebar.checkbox("Disturbo a Bande Colorate", value=False),
-        'broken_lines': st.sidebar.checkbox("Linee Spezzate Interferenza", value=False),
-        'circuit_grid': st.sidebar.checkbox("Circuit Grid Digitale", value=False)
+        'band_noise_intensity': st.sidebar.slider("Intensità Disturbo a Bande", 0.0, 1.0, 0.3),
+
+        'broken_lines': st.sidebar.checkbox("Linee Spezzate B/N + Colorate", value=False),
+        'broken_lines_intensity': st.sidebar.slider("Intensità Linee Spezzate", 0.0, 1.0, 0.3),
+
+        'digital_grid': st.sidebar.checkbox("Griglia Digitale", value=False),
+        'digital_grid_intensity': st.sidebar.slider("Intensità Griglia Digitale", 0.0, 1.0, 0.3),
+
+        # Movimento organico 3D
+        'motion_angle': st.sidebar.slider("Movimento 3D Angolo (gradi)", 0, 5, 2),
+        'motion_zoom': st.sidebar.slider("Movimento 3D Zoom (%)", 0, 5, 2),
+        'motion_tx': st.sidebar.slider("Movimento 3D Traslazione X (px)", 0, 10, 5),
+        'motion_ty': st.sidebar.slider("Movimento 3D Traslazione Y (px)", 0, 10, 5),
     }
-
-    level = st.sidebar.radio("Difficoltà Glitch", ['Soft', 'Medium', 'Hard'])
-
-    # Modifica parametri in base a livello
-    if level == 'Soft':
-        settings = {k: (v and random.random() < 0.3) for k, v in settings.items()}
-    elif level == 'Medium':
-        settings = {k: (v and random.random() < 0.6) for k, v in settings.items()}
-    else:
-        # Hard abilita quasi tutto
-        settings = {k: v for k, v in settings.items()}
 
     generate_btn = st.sidebar.button(":clapper: Genera Video")
 
@@ -303,7 +285,11 @@ def main():
 
     img = Image.open(uploaded_img).convert('RGB')
     img_np = np.array(img)
-    st.image(img_np, caption="Immagine caricata", use_container_width=True)
+
+    # Ridimensiona e pad per proporzione scelta
+    img_np = resize_and_pad(img_np, ratio_options[ratio_choice])
+
+    st.image(img_np, caption="Immagine caricata ridimensionata", use_container_width=True)
 
     if generate_btn:
         with st.spinner("Generazione glitch video..."):
