@@ -4,7 +4,7 @@ import cv2
 import subprocess
 import tempfile
 import os
-import random  # Importiamo random per gli effetti glitch
+import random
 from pathlib import Path
 from PIL import Image
 
@@ -63,7 +63,7 @@ def apply_glitch_with_ffmpeg(input_path, output_path, duration=5, fps=30):
     """
     cmd = [
         'ffmpeg',
-        '-y',  # Sovrascrivi file esistente
+        '-y',
         '-loop', '1', '-i', str(input_path),
         '-c:v', 'libx264',
         '-preset', 'ultrafast',
@@ -81,11 +81,14 @@ def apply_glitch_with_ffmpeg(input_path, output_path, duration=5, fps=30):
     ]
 
     try:
-        subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        result = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         return True
     except subprocess.CalledProcessError as e:
         st.error("❌ Errore durante la generazione del video con FFmpeg")
-        st.code(e.stderr.decode())
+        if e.stderr:
+            st.code(e.stderr.decode())
+        else:
+            st.code("Errore sconosciuto: nessun output da FFmpeg.")
         return False
 
 
