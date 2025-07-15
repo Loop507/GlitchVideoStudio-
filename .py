@@ -1,12 +1,20 @@
-# GlitchVideoStudio.py
+# streamlit_app.py
 # Copyright (c) 2025 Loop507
 # MIT License - https://opensource.org/licenses/MIT 
 
-import cv2
+import streamlit as st
 import numpy as np
+import cv2
 import random
+import tempfile
 import os
 
+st.set_page_config(page_title="Glitch Video Studio", layout="centered")
+
+st.title("🎞️ Glitch Video Studio")
+st.markdown("by **Loop507** – Carica un'immagine e genera un video glitchato direttamente nel browser.")
+
+# --- Effetti glitch ---
 def apply_pixel_shuffle(frame, intensity=5):
     height, width = frame.shape[:2]
     block_size = intensity
@@ -43,19 +51,18 @@ def apply_vhs_noise(frame, intensity=5):
     white_noise[mask == 255] = [255, 255, 255]
     return cv2.addWeighted(frame, 0.8, white_noise, 0.2, 0)
 
-def create_glitch_video_from_image(image_path, output_path="output_video.mp4", duration=5, fps=30):
-    base_frame = cv2.imread(image_path)
-    if base_frame is None:
-        raise FileNotFoundError(f"Immagine non trovata: {image_path}")
-
-    height, width = base_frame.shape[:2]
+# --- Generatore video glitch ---
+def create_glitch_video(image, duration=5, fps=30):
+    height, width = image.shape[:2]
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+    temp_dir = tempfile.TemporaryDirectory()
+    video_path = os.path.join(temp_dir.name, "output_video.mp4")
+    out = cv2.VideoWriter(video_path, fourcc, fps, (width, height))
 
     num_frames = fps * duration
 
     for i in range(num_frames):
-        frame = base_frame.copy()
+        frame = image.copy()
         if i % 2 == 0:
             frame = apply_pixel_shuffle(frame, intensity=5)
         if i % 5 == 0:
@@ -67,26 +74,23 @@ def create_glitch_video_from_image(image_path, output_path="output_video.mp4", d
         out.write(frame)
 
     out.release()
-    print(f"Video glitch creato: {output_path}")
-    return output_path
+    return video_path, temp_dir
 
-if __name__ == "__main__":
-    print("=== Glitch Video Studio by Loop507 ===")
-    image_path = input("Inserisci il percorso dell'immagine: ").strip()
-    if not os.path.exists(image_path):
-        print("[ERRORE] Immagine non trovata.")
-        exit()
+# --- Interfaccia Streamlit ---
+uploaded_file = st.file_uploader("Carica un'immagine", type=["jpg", "jpeg", "png"])
 
-    try:
-        duration = int(input("Durata del video (secondi): "))
-    except ValueError:
-        print("[ERRORE] Devi inserire un numero valido per la durata.")
-        exit()
+if uploaded_file is not None:
+    file_bytes = np.frombuffer(uploaded_file.read(), np.uint8)
+    img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+    st.image(cv2.cvtColor(img, cv2.COLOR_BGR2RGB), caption="Immagine caricata", use_column_width=True)
 
-    output_name = input("Nome del video di output (es. mio_video.mp4): ").strip()
-    if not output_name.endswith(".mp4"):
-        output_name += ".mp4"
+    duration = st.slider("Durata del video (secondi)", 1, 30, 5)
+    if st.button("Crea Video Glitch"):
+        with st.spinner("Generando video..."):
+            video_path, temp_dir = create_glitch_video(img, duration=duration)
 
-    print("\nGenerando video glitchato...\n")
-    result = create_glitch_video_from_image(image_path=image_path, output_path=output_name, duration=duration)
-    print(f"\n✨ Video completato: {result}")
+            with open(video_path, "rb") as f:
+                st.success("Fatto! Clicca per scaricare.")
+                st.download_button("📥 Scarica il video glitchato", f, file_name="glitch_video.mp4", mime="video/mp4")
+
+        temp_dir.cleanup()
