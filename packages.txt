@@ -10,8 +10,3 @@ libavformat-dev
 libswscale-dev
 libgstreamer-plugins-base1.0-dev
 libgstreamer1.0-dev
-libpng-dev
-libjpeg-dev
-libopenexr-dev
-libtiff-dev
-libwebp-dev
