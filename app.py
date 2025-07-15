@@ -6,9 +6,6 @@ import tempfile
 import subprocess
 import os
 from pathlib import Path
-from pydub import AudioSegment
-
-# Funzioni glitch base (più avanti si possono ampliare)
 
 def apply_pixel_shuffle(frame, intensity=5):
     h, w = frame.shape[:2]
@@ -31,7 +28,6 @@ def apply_pixel_shuffle(frame, intensity=5):
 def apply_rgb_shift(frame, intensity=5):
     b, g, r = cv2.split(frame)
     rows, cols = frame.shape[:2]
-    # sposta canali RGB di random offset max intensity
     def shift_channel(ch):
         dx = np.random.randint(-intensity, intensity)
         dy = np.random.randint(-intensity, intensity)
@@ -56,7 +52,6 @@ def apply_scanlines(frame, intensity=5):
         frame[y:y+intensity, :] = frame[y:y+intensity, :] * 0.5
     return frame
 
-# Funzione ridimensiona + padding per risoluzioni
 def resize_and_pad(img, target_ratio):
     h, w = img.shape[:2]
     current_ratio = w / h
@@ -66,9 +61,7 @@ def resize_and_pad(img, target_ratio):
     else:
         new_h = h
         new_w = int(h * target_ratio)
-    # ridimensiona immagine alla nuova dimensione con padding nero
     result = np.zeros((new_h, new_w, 3), dtype=np.uint8)
-    # calcola offset per centrare
     y_off = (new_h - h) // 2
     x_off = (new_w - w) // 2
     result[y_off:y_off+h, x_off:x_off+w] = img
@@ -83,31 +76,22 @@ def get_aspect_ratio(res):
         return 16/9
 
 def generate_video_with_ffmpeg(img_path, audio_path, output_path, duration, fps, glitch_effect, intensity, progress_bar):
-    # Costruiamo il filtro ffmpeg in base all'effetto scelto
-    # (Es: pixel shuffle dinamico fatto in python, qui invece solo effetti analogici e glitch visivi via ffmpeg)
     filters = []
-    # esempio effetti ffmpeg semplici da aggiungere:
     if glitch_effect == "Color Inversion":
         filters.append("negate")
     elif glitch_effect == "Analog Noise":
         filters.append("noise=alls=20:allf=t")
-    elif glitch_effect == "Scanlines":
+    elif glitch_effect == "Scanlines VHS":
         filters.append("drawbox=y=0:color=black@0.3:width=iw:height=4:t=fill")
-    # ...aggiungere altri filtri custom
-
     vf_filter = ",".join(filters) if filters else "null"
-
-    # Costruzione comando ffmpeg
     cmd = [
         "ffmpeg",
         "-y",
         "-loop", "1",
         "-i", str(img_path),
     ]
-
     if audio_path:
         cmd += ["-i", str(audio_path), "-shortest"]
-
     cmd += [
         "-c:v", "libx264",
         "-preset", "ultrafast",
@@ -117,16 +101,12 @@ def generate_video_with_ffmpeg(img_path, audio_path, output_path, duration, fps,
         "-pix_fmt", "yuv420p",
         str(output_path)
     ]
-
-    # esecuzione con aggiornamento progress bar (semplice, stima tempo)
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-
     while True:
         line = process.stderr.readline()
         if line == '' and process.poll() is not None:
             break
         if "frame=" in line:
-            # estrai frame corrente e aggiorna barra
             parts = line.strip().split()
             for p in parts:
                 if p.startswith("frame="):
@@ -136,8 +116,6 @@ def generate_video_with_ffmpeg(img_path, audio_path, output_path, duration, fps,
                     break
     process.wait()
     return process.returncode == 0
-
-# Main App Streamlit
 
 def main():
     st.title("🎥 Glitch Video Studio Minimal")
@@ -159,12 +137,9 @@ def main():
 
     img = Image.open(uploaded_image).convert("RGB")
     img_np = np.array(img)
-
-    # Ridimensiona + padding immagine secondo risoluzione
     aspect_ratio = get_aspect_ratio(resolution)
     img_np_resized = resize_and_pad(img_np, aspect_ratio)
 
-    # Preview glitch frame interattiva
     st.subheader("Anteprima glitch")
     preview = None
     if glitch_effect == "Pixel Shuffle":
@@ -180,34 +155,21 @@ def main():
     if preview is not None:
         st.image(preview, use_column_width=True)
 
-    # Determina durata video in base a audio o slider
     audio_path = None
-    duration_final = duration
     if uploaded_audio:
-        # salva audio temporaneo e calcola durata
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as f:
-            audio_bytes = uploaded_audio.read()
-            f.write(audio_bytes)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=Path(uploaded_audio.name).suffix) as f:
+            f.write(uploaded_audio.read())
             audio_path = f.name
-        audio_seg = AudioSegment.from_file(audio_path)
-        duration_final = audio_seg.duration_seconds
-        # Stessa durata video audio
 
     if st.button("Genera Video Glitch"):
         with st.spinner("Generazione video..."):
             temp_dir = tempfile.TemporaryDirectory()
             img_path = Path(temp_dir.name) / "input.jpg"
             output_path = Path(temp_dir.name) / "output.mp4"
-
-            # Salva immagine ridimensionata per ffmpeg
             cv2.imwrite(str(img_path), cv2.cvtColor(img_np_resized, cv2.COLOR_RGB2BGR))
-
-            # Progress bar
             progress_bar = st.progress(0)
-
-            success = generate_video_with_ffmpeg(img_path, audio_path, output_path, duration_final, 30,
+            success = generate_video_with_ffmpeg(img_path, audio_path, output_path, duration, 30,
                                                  glitch_effect, intensity, progress_bar)
-
             if success and output_path.exists():
                 video_bytes = output_path.read_bytes()
                 st.success("✅ Video generato!")
@@ -216,7 +178,6 @@ def main():
                                    mime="video/mp4")
             else:
                 st.error("❌ Errore generazione video.")
-
             temp_dir.cleanup()
             if audio_path:
                 os.unlink(audio_path)
