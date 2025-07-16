@@ -7,10 +7,16 @@ import random
 from pathlib import Path
 from PIL import Image
 import math
+import json
 
 st.set_page_config(page_title="🎥 Glitch Video Studio", page_icon="🎥", layout="wide")
 
-# === EFFETTI GLITCH ===
+# === CACHING ===
+@st.cache_data(show_spinner=False)
+def cached_resize(img, fmt):
+    return resize_to_format(img, fmt)
+
+# === EFFETTI GLITCH (in HSV/LAB/Time-based support) ===
 def apply_pixel_shuffle(frame, intensity=5):
     h, w = frame.shape[:2]
     block = max(1, int(min(h, w) / intensity))
@@ -26,10 +32,11 @@ def apply_pixel_shuffle(frame, intensity=5):
         new_frame[ty:ty+block, tx:tx+block] = src
     return new_frame
 
-def apply_rgb_shift(frame, max_shift=5):
+def apply_rgb_shift(frame, i, total_frames, max_shift=5):
     h, w = frame.shape[:2]
-    shift_x = random.randint(-max_shift, max_shift)
-    shift_y = random.randint(-max_shift, max_shift)
+    dynamic_shift = int(max_shift * math.sin(2 * math.pi * i / total_frames))
+    shift_x = random.randint(-dynamic_shift, dynamic_shift)
+    shift_y = random.randint(-dynamic_shift, dynamic_shift)
     b, g, r = cv2.split(frame)
     def shift(c, dx, dy):
         return cv2.warpAffine(c, np.float32([[1, 0, dx], [0, 1, dy]]), (w, h), borderMode=cv2.BORDER_REFLECT)
@@ -39,99 +46,50 @@ def apply_color_inversion(frame):
     return cv2.bitwise_not(frame)
 
 def apply_analog_noise(frame, amount=0.1):
-    noise = np.random.randn(*frame.shape) * 255 * amount
-    noisy = np.clip(frame + noise, 0, 255).astype(np.uint8)
-    return noisy
+    lab = cv2.cvtColor(frame, cv2.COLOR_RGB2LAB).astype(np.float32)
+    noise = np.random.randn(*lab.shape).astype(np.float32) * amount * 10
+    lab += noise
+    lab = np.clip(lab, 0, 255).astype(np.uint8)
+    return cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
 
 def apply_scanlines(frame):
     for y in range(0, frame.shape[0], 2):
         frame[y:y+1, :] = frame[y:y+1, :] // 2
     return frame
 
-def apply_posterization(frame, levels=4):
-    div = 256 // levels
-    return (frame // div * div).astype(np.uint8)
-
-def apply_jpeg_artifacts(frame):
-    encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), 15]
-    _, encimg = cv2.imencode('.jpg', frame, encode_param)
-    return cv2.imdecode(encimg, 1)
-
-def apply_row_column_shift(frame):
-    h, w = frame.shape[:2]
-    frame = frame.copy()
-    for _ in range(5):
-        row = random.randint(0, h - 2)
-        shift = random.randint(-10, 10)
-        frame[row] = np.roll(frame[row], shift, axis=0)
-    return frame
-
-def apply_wave_distortion(frame):
-    h, w = frame.shape[:2]
-    distorted = np.zeros_like(frame)
-    for y in range(h):
-        offset = int(10.0 * math.sin(2 * math.pi * y / 64 + random.uniform(-0.5, 0.5)))
-        distorted[y] = np.roll(frame[y], offset, axis=0)
-    return distorted
-
-def apply_pixel_stretch(frame):
-    h, w = frame.shape[:2]
-    stretched = frame.copy()
-    for _ in range(5):
-        y = random.randint(0, h - 1)
-        stretched[y] = stretched[y, random.randint(0, w - 1)]
-    return stretched
-
-def apply_edge_overlay(frame):
-    edges = cv2.Canny(cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY), 100, 200)
-    edge_colored = cv2.cvtColor(edges, cv2.COLOR_GRAY2RGB)
-    return cv2.addWeighted(frame, 0.8, edge_colored, 0.2, 0)
-
-def apply_hue_shift(frame, shift=30):
+def apply_hue_shift(frame, i, total_frames, shift_base=30):
     hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
-    hsv[..., 0] = (hsv[..., 0] + shift) % 180
+    hsv[..., 0] = (hsv[..., 0] + int(shift_base * math.sin(i / total_frames * 2 * math.pi))) % 180
     return cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)
 
-def apply_glitch_grid(frame):
-    h, w = frame.shape[:2]
-    grid = frame.copy()
-    step = 20
-    for y in range(0, h, step):
-        cv2.line(grid, (0, y), (w, y), (0, 255, 255), 1)
-    for x in range(0, w, step):
-        cv2.line(grid, (x, 0), (x, h), (0, 255, 255), 1)
-    return cv2.addWeighted(frame, 0.9, grid, 0.1, 0)
+def apply_datamosh(frame, prev_frame):
+    blend = cv2.addWeighted(frame, 0.5, prev_frame, 0.5, 0)
+    return blend
 
-def apply_vhs_effect(frame):
-    frame = apply_scanlines(frame)
-    frame = apply_wave_distortion(frame)
-    frame = apply_analog_noise(frame, 0.03)
-    return frame
-
-def apply_base_motion(frame, frame_idx, total_frames, motion_intensity, motion_speed):
+# === MOTION ===
+def apply_base_motion(frame, frame_idx, total_frames, motion_type, motion_intensity, motion_speed):
     h, w = frame.shape[:2]
     center = (w // 2, h // 2)
     t = frame_idx / total_frames * motion_speed
-    angle = math.sin(t * 2 * math.pi) * 5 * motion_intensity
-    scale = 1 + 0.02 * math.cos(t * 2 * math.pi) * motion_intensity
-    tx = 5 * math.sin(t * 2 * math.pi * 0.5) * motion_intensity
-    ty = 5 * math.cos(t * 2 * math.pi * 0.5) * motion_intensity
+    angle = scale = tx = ty = 0
+    if motion_type in ["rotate", "mix"]:
+        angle = math.sin(t * 2 * math.pi) * 5 * motion_intensity
+    if motion_type in ["zoom", "mix"]:
+        scale = 1 + 0.02 * math.cos(t * 2 * math.pi) * motion_intensity
+    else:
+        scale = 1
+    if motion_type in ["translate", "mix"]:
+        tx = 5 * math.sin(t * 2 * math.pi * 0.5) * motion_intensity
+        ty = 5 * math.cos(t * 2 * math.pi * 0.5) * motion_intensity
     M = cv2.getRotationMatrix2D(center, angle, scale)
     M[0, 2] += tx
     M[1, 2] += ty
-    moved = cv2.warpAffine(frame, M, (w, h), borderMode=cv2.BORDER_REFLECT)
-    return moved
+    return cv2.warpAffine(frame, M, (w, h), borderMode=cv2.BORDER_REFLECT)
 
-# RIDIMENSIONAMENTO IMMAGINE IN BASE AL FORMATO
-
+# === FORMAT ===
 def resize_to_format(img_np, fmt):
     h, w = img_np.shape[:2]
-    if fmt == "16:9":
-        target_ratio = 16 / 9
-    elif fmt == "9:16":
-        target_ratio = 9 / 16
-    else:
-        target_ratio = 1.0
+    target_ratio = {"16:9": 16 / 9, "9:16": 9 / 16, "1:1": 1.0}.get(fmt, 16 / 9)
     cur_ratio = w / h
     if cur_ratio > target_ratio:
         new_w = int(h * target_ratio)
@@ -143,33 +101,37 @@ def resize_to_format(img_np, fmt):
         img_np = img_np[offset:offset+new_h, :]
     return img_np
 
-# === GENERA FRAME ===
+# === PRESET HANDLING ===
+def save_preset(preset):
+    with open("glitch_preset.json", "w") as f:
+        json.dump(preset, f)
+
+def load_preset():
+    try:
+        with open("glitch_preset.json", "r") as f:
+            return json.load(f)
+    except:
+        return None
+
+# === FRAME GENERATION ===
 def generate_glitch_frames(img_np, n_frames, output_dir, settings):
+    prev_frame = img_np.copy()
     progress_bar = st.progress(0)
     for i in range(n_frames):
-        base_frame = apply_base_motion(img_np.copy(), i, n_frames, settings['motion_intensity'], settings['motion_speed'])
-        frame = base_frame.copy()
-
-        if settings['pixel_shuffle']: frame = apply_pixel_shuffle(frame, settings['pixel_shuffle_int'])
-        if settings['rgb_shift']: frame = apply_rgb_shift(frame, settings['rgb_shift_int'])
+        frame = apply_base_motion(img_np.copy(), i, n_frames, settings['motion_type'], settings['motion_intensity'], settings['motion_speed'])
+        if settings['pixel_shuffle']: frame = apply_pixel_shuffle(frame, int(10 * settings['intensity']))
+        if settings['rgb_shift']: frame = apply_rgb_shift(frame, i, n_frames, 5)
         if settings['invert']: frame = apply_color_inversion(frame)
-        if settings['noise']: frame = apply_analog_noise(frame, settings['noise_int'])
+        if settings['noise']: frame = apply_analog_noise(frame, 0.1 * settings['intensity'])
         if settings['scanlines']: frame = apply_scanlines(frame)
-        if settings['posterize']: frame = apply_posterization(frame, settings['posterize_lvl'])
-        if settings['hue_shift']: frame = apply_hue_shift(frame, settings['hue_shift_val'])
-        if settings['glitch_grid']: frame = apply_glitch_grid(frame)
-        if settings['jpeg']: frame = apply_jpeg_artifacts(frame)
-        if settings['rowcol']: frame = apply_row_column_shift(frame)
-        if settings['wave']: frame = apply_wave_distortion(frame)
-        if settings['stretch']: frame = apply_pixel_stretch(frame)
-        if settings['edge']: frame = apply_edge_overlay(frame)
-        if settings['vhs']: frame = apply_vhs_effect(frame)
-
+        if settings['hue_shift']: frame = apply_hue_shift(frame, i, n_frames, 30)
+        if settings['datamosh'] and i % 7 == 0: frame = apply_datamosh(frame, prev_frame)
+        prev_frame = frame.copy()
         fname = output_dir / f"frame_{i:04d}.jpg"
-        cv2.imwrite(str(fname), cv2.cvtColor(frame, cv2.COLOR_RGB2BGR), [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+        cv2.imwrite(str(fname), cv2.cvtColor(frame, cv2.COLOR_RGB2BGR), [int(cv2.IMWRITE_JPEG_QUALITY), 70])
         progress_bar.progress((i + 1) / n_frames)
 
-# === GENERA VIDEO ===
+# === VIDEO ===
 def generate_video_from_frames(output_path, frame_rate, temp_dir):
     cmd = [
         'ffmpeg', '-y', '-framerate', str(frame_rate),
@@ -180,77 +142,79 @@ def generate_video_from_frames(output_path, frame_rate, temp_dir):
     ]
     subprocess.run(cmd, check=True)
 
-# === MAIN APP ===
+# === MAIN ===
 def main():
-    st.title(":camera: Glitch Video Studio")
-    st.sidebar.header(":gear: Impostazioni")
-
+    st.title("🎥 Glitch Video Studio")
     uploaded_img = st.sidebar.file_uploader("Carica immagine", type=["png", "jpg", "jpeg"])
-    duration = st.sidebar.slider("Durata video (sec)", 1, 20, 5)
+    video_format = st.sidebar.selectbox("Formato video", ["16:9", "9:16", "1:1"])
+    duration = st.sidebar.slider("Durata (s)", 1, 20, 5)
     fps = st.sidebar.slider("FPS", 10, 30, 15)
-    video_format = st.sidebar.selectbox("Formato video", ["16:9", "9:16", "1:1"], index=0)
+    st.sidebar.markdown("---")
+    if st.sidebar.button("💾 Salva preset"):
+        save_preset(st.session_state.get("settings", {}))
+    if st.sidebar.button("📂 Carica preset"):
+        preset = load_preset()
+        if preset:
+            st.session_state.settings = preset
+            st.experimental_rerun()
 
     st.sidebar.markdown("---")
-    st.sidebar.subheader(":control_knobs: Controlli Globali")
-    global_intensity = st.sidebar.slider("Intensità Globale", 0.1, 2.0, 1.0, 0.1)
-    global_speed = st.sidebar.slider("Velocità Glitch", 0.1, 2.0, 1.0, 0.1)
-    global_color = st.sidebar.slider("Saturazione Colore", 0.0, 2.0, 1.0, 0.1)
-    motion_intensity = st.sidebar.slider("Intensità Movimento", 0.0, 3.0, 1.0, 0.1)
-    motion_speed = st.sidebar.slider("Velocità Movimento", 0.1, 3.0, 1.0, 0.1)
-
+    intensity = st.sidebar.slider("Intensità effetti", 0.1, 2.0, 1.0, 0.1)
+    speed = st.sidebar.slider("Velocità glitch", 0.1, 2.0, 1.0, 0.1)
+    color = st.sidebar.slider("Colore", 0.1, 2.0, 1.0, 0.1)
+    motion_type = st.sidebar.selectbox("Tipo movimento", ["mix", "rotate", "zoom", "translate"])
+    motion_intensity = st.sidebar.slider("Intensità movimento", 0.0, 3.0, 1.0, 0.1)
+    motion_speed = st.sidebar.slider("Velocità movimento", 0.1, 3.0, 1.0, 0.1)
     st.sidebar.markdown("---")
-    st.sidebar.subheader(":game_die: Effetti")
+    pixel_shuffle = st.sidebar.checkbox("Pixel Shuffle", value=True)
+    rgb_shift = st.sidebar.checkbox("RGB Shift", value=True)
+    invert = st.sidebar.checkbox("Inversione Colori")
+    noise = st.sidebar.checkbox("Noise Analogico")
+    scanlines = st.sidebar.checkbox("Scanlines CRT")
+    hue_shift = st.sidebar.checkbox("Hue Psichedelico")
+    datamosh = st.sidebar.checkbox("Datamosh Light")
 
     settings = {
-        'pixel_shuffle': st.sidebar.checkbox("Pixel Shuffle", value=True),
-        'pixel_shuffle_int': int(10 * global_intensity),
-        'rgb_shift': st.sidebar.checkbox("RGB Shift", value=True),
-        'rgb_shift_int': int(5 * global_intensity),
-        'invert': st.sidebar.checkbox("Color Inversion", value=False),
-        'noise': st.sidebar.checkbox("Analog Noise + Grain", value=False),
-        'noise_int': 0.1 * global_intensity,
-        'scanlines': st.sidebar.checkbox("Scanlines CRT", value=False),
-        'posterize': st.sidebar.checkbox("Posterize + Contrast", value=False),
-        'posterize_lvl': max(2, int(6 / global_intensity)),
-        'hue_shift': st.sidebar.checkbox("Hue Shift Psichedelico", value=False),
-        'hue_shift_val': int(30 * global_intensity),
-        'glitch_grid': st.sidebar.checkbox("Glitch Grid Overlay", value=False),
-        'jpeg': st.sidebar.checkbox("JPEG Artifacts", value=False),
-        'rowcol': st.sidebar.checkbox("Row/Column Shift", value=False),
-        'wave': st.sidebar.checkbox("Wave Distortion", value=False),
-        'stretch': st.sidebar.checkbox("Pixel Stretch", value=False),
-        'edge': st.sidebar.checkbox("Edge Overlay", value=False),
-        'vhs': st.sidebar.checkbox("VHS Effect", value=False),
+        'intensity': intensity,
+        'speed': speed,
+        'color': color,
+        'motion_type': motion_type,
         'motion_intensity': motion_intensity,
-        'motion_speed': motion_speed
+        'motion_speed': motion_speed,
+        'pixel_shuffle': pixel_shuffle,
+        'rgb_shift': rgb_shift,
+        'invert': invert,
+        'noise': noise,
+        'scanlines': scanlines,
+        'hue_shift': hue_shift,
+        'datamosh': datamosh
     }
+    st.session_state.settings = settings
 
     if uploaded_img:
-        img = Image.open(uploaded_img).convert('RGB')
-        img_np = resize_to_format(np.array(img), video_format)
-        st.image(img_np, caption="Immagine caricata", use_container_width=True)
+        img = Image.open(uploaded_img).convert("RGB")
+        img_np = cached_resize(np.array(img), video_format)
+        st.image(img_np, caption="Anteprima immagine", use_container_width=True)
 
-        if st.button(":clapper: Avvia generazione"):
-            with st.spinner("Generazione glitch video..."):
+        if st.button("🎬 Genera video glitch"):
+            with st.spinner("Creazione in corso..."):
                 temp_dir = tempfile.TemporaryDirectory()
                 output_dir = Path(temp_dir.name)
                 n_frames = duration * fps
-
                 generate_glitch_frames(img_np, n_frames, output_dir, settings)
-
-                video_path = output_dir / "glitch_video.mp4"
+                video_path = output_dir / "glitch_output.mp4"
                 try:
                     generate_video_from_frames(video_path, fps, output_dir)
-                    st.success("✅ Video generato!")
+                    st.success("✅ Video creato con successo!")
                     with open(video_path, "rb") as vf:
                         st.video(vf.read())
-                        st.download_button("Scarica Video", data=vf, file_name="glitch_video.mp4")
+                        st.download_button("⬇️ Scarica Video", vf, file_name="glitch_output.mp4")
                 except subprocess.CalledProcessError:
                     st.error("Errore durante la generazione del video.")
                 finally:
                     temp_dir.cleanup()
     else:
-        st.warning("Carica un'immagine per iniziare")
+        st.warning("📷 Carica un'immagine per iniziare.")
 
 if __name__ == "__main__":
     main()
