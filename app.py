@@ -273,7 +273,7 @@ def main():
                 if k in settings:
                     settings[k] = v
             st.session_state['preset'] = loaded
-            st.experimental_rerun()
+            st.rerun()
         else:
             st.warning("Nessun preset trovato")
 
@@ -308,4 +308,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
