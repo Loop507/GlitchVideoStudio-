@@ -30,7 +30,6 @@ def apply_pixel_shuffle(frame, intensity=5):
 
 def apply_rgb_shift(frame, i=0, total_frames=1, max_shift=5):
     h, w = frame.shape[:2]
-    # Calcolo dinamico del shift, almeno 1
     dynamic_shift = max(1, int(max_shift * abs(math.sin(i / max(1,total_frames) * 2 * math.pi))))
     shift_x = random.randint(-dynamic_shift, dynamic_shift)
     shift_y = random.randint(-dynamic_shift, dynamic_shift)
@@ -40,7 +39,6 @@ def apply_rgb_shift(frame, i=0, total_frames=1, max_shift=5):
     return cv2.merge([shift(b, -shift_x, -shift_y), shift(g, 0, 0), shift(r, shift_x, shift_y)])
 
 def apply_color_inversion(frame, intensity=1.0):
-    # Intensity 0..1 for partial inversion (blend)
     inverted = cv2.bitwise_not(frame)
     return cv2.addWeighted(frame, 1 - intensity, inverted, intensity, 0)
 
@@ -96,9 +94,7 @@ def apply_edge_overlay(frame):
 
 def apply_hue_shift(frame, i=0, total_frames=1, max_shift=30):
     hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV).astype(np.float32)
-    shift_base = max_shift
-    # variazione nel tempo con sin
-    shift_val = int(shift_base * math.sin(i / max(1,total_frames) * 2 * math.pi))
+    shift_val = int(max_shift * math.sin(i / max(1,total_frames) * 2 * math.pi))
     hsv[..., 0] = (hsv[..., 0] + shift_val) % 180
     hsv[..., 1] = np.clip(hsv[..., 1] * 1.0, 0, 255)
     hsv[..., 2] = np.clip(hsv[..., 2] * 1.0, 0, 255)
@@ -121,7 +117,6 @@ def apply_vhs_effect(frame):
     return frame
 
 def apply_datamosh(frames, i, mix_prob=0.15):
-    # Duplicazione/miscelazione frame consecutivi per effetto scia
     if i > 0 and random.random() < mix_prob:
         alpha = random.uniform(0.4, 0.7)
         blended = cv2.addWeighted(frames[i], alpha, frames[i-1], 1-alpha, 0)
@@ -143,8 +138,6 @@ def apply_base_motion(frame, i, total_frames, motion_intensity, motion_speed):
     moved = cv2.warpAffine(frame, M, (w, h), borderMode=cv2.BORDER_REFLECT)
     return moved
 
-# RIDIMENSIONAMENTO IMMAGINE IN BASE AL FORMATO
-
 def resize_to_format(img_np, fmt):
     h, w = img_np.shape[:2]
     if fmt == "16:9":
@@ -155,7 +148,7 @@ def resize_to_format(img_np, fmt):
         target_ratio = 1.0
     cur_ratio = w / h
     if abs(cur_ratio - target_ratio) < 0.01:
-        return img_np  # già formato giusto
+        return img_np
     if cur_ratio > target_ratio:
         new_w = int(h * target_ratio)
         offset = (w - new_w) // 2
@@ -166,15 +159,12 @@ def resize_to_format(img_np, fmt):
         img_np = img_np[offset:offset+new_h, :]
     return img_np
 
-# === CACHE FRAME GENERATION ===
 @st.cache_data(show_spinner=False)
 def cached_generate_glitch_frames(img_np, n_frames, settings):
-    # Genera frames e ritorna lista frame numpy
     frames = []
     for i in range(n_frames):
         base_frame = apply_base_motion(img_np.copy(), i, n_frames, settings['motion_intensity'], settings['motion_speed'])
         frame = base_frame.copy()
-
         if settings['pixel_shuffle']: frame = apply_pixel_shuffle(frame, settings['pixel_shuffle_int'])
         if settings['rgb_shift']: frame = apply_rgb_shift(frame, i, n_frames, settings['rgb_shift_int'])
         if settings['invert']: frame = apply_color_inversion(frame, settings['invert_int'])
@@ -189,14 +179,11 @@ def cached_generate_glitch_frames(img_np, n_frames, settings):
         if settings['stretch']: frame = apply_pixel_stretch(frame)
         if settings['edge']: frame = apply_edge_overlay(frame)
         if settings['vhs']: frame = apply_vhs_effect(frame)
-
         frames.append(frame)
-    # Applicazione datamosh come blending tra frame (effetto scia)
     for i in range(n_frames):
         frames[i] = apply_datamosh(frames, i, settings['datamosh_prob'])
     return frames
 
-# === SALVA E CARICA PRESET ===
 def save_preset(settings, filename="preset.json"):
     with open(filename, "w") as f:
         json.dump(settings, f)
@@ -208,7 +195,6 @@ def load_preset(filename="preset.json"):
     except:
         return None
 
-# === GENERA VIDEO ===
 def generate_video_from_frames(output_path, frame_rate, frames, quality=85):
     temp_dir = tempfile.TemporaryDirectory()
     temp_path = Path(temp_dir.name)
@@ -225,7 +211,6 @@ def generate_video_from_frames(output_path, frame_rate, frames, quality=85):
     subprocess.run(cmd, check=True)
     temp_dir.cleanup()
 
-# === MAIN APP ===
 def main():
     st.title(":camera: Glitch Video Studio")
     st.sidebar.header(":gear: Impostazioni")
@@ -273,7 +258,6 @@ def main():
         'motion_speed': motion_speed
     }
 
-    # Pulsanti per preset
     if 'preset' not in st.session_state:
         st.session_state['preset'] = None
 
@@ -296,13 +280,12 @@ def main():
     if uploaded_img:
         img = Image.open(uploaded_img).convert('RGB')
         img_np = resize_to_format(np.array(img), video_format)
-        st.image(img_np, caption="Immagine caricata", use_container_width=True)
+        st.image(img_np, caption="Immagine caricata", width="stretch")
 
         if st.button(":clapper: Avvia generazione"):
             with st.spinner("Generazione glitch video..."):
                 n_frames = duration * fps
                 frames = cached_generate_glitch_frames(img_np, n_frames, settings)
-                # Modifica saturazione globale
                 if global_color != 1.0:
                     for i in range(len(frames)):
                         hsv = cv2.cvtColor(frames[i], cv2.COLOR_RGB2HSV).astype(np.float32)
@@ -325,3 +308,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
